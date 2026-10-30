@@ -81,13 +81,13 @@ await bus.subscribe({
 ## Develop and publish
 
 ```bash
-npm install
-npm test             # Vitest
-npm run typecheck
-npm run build        # dist/: JavaScript and .d.ts
+pnpm install
+pnpm test             # Vitest
+pnpm typecheck
+pnpm build        # dist/: JavaScript and .d.ts
 npm pack             # divya2424-basketline-kafka-<version>.tgz, to try in another project
 ```
 
 **Publishing:** bump `version` in `package.json`, push, and create a GitHub release `vX.Y.Z`. The `publish` workflow runs the typecheck, tests and build, then publishes to GitHub Packages. `ci` runs the same checks on every push and pull request.
 
-Then, in Basketline's `backend/`: `npm install @divya2424/basketline-kafka@<version> -w @basketline/platform -w @basketline/contracts`, and rebuild the service images.
+Then, in Basketline's `backend/`: `pnpm --filter @basketline/platform --filter @basketline/contracts add @divya2424/basketline-kafka@<version>`, and rebuild the service images.

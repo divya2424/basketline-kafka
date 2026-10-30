@@ -4,28 +4,42 @@
   "description": "Basketline's event bus on Kafka: ordered publishing, consumer groups with retries and a dead-letter topic, and an in-memory bus for tests.",
   "license": "UNLICENSED",
   "type": "module",
-  "repository": { "type": "git", "url": "git+https://github.com/divya2424/basketline-kafka.git" },
-  "publishConfig": { "registry": "https://npm.pkg.github.com" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/divya2424/basketline-kafka.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
-  "engines": { "node": ">=24" },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
+    "lint": "oxlint",
+    "prebuild": "pnpm lint",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
   },
   "dependencies": {
     "@platformatic/kafka": "^2.14.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "oxlint": "1.88.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
-  }
+  },
+  "packageManager": "pnpm@12.14.0"
 }

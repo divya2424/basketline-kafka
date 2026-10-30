@@ -12,12 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # pnpm, at the version package.json's packageManager pins.
+      - run: corepack enable pnpm
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://npm.pkg.github.com
           scope: '@divya2424'
-      - run: npm ci
-      - run: npm publish
+      - run: pnpm install --frozen-lockfile
+      # A release checks out a tag, not a branch: --no-git-checks lets pnpm publish from it.
+      - run: pnpm publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
