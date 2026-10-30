@@ -1,0 +1,31 @@
+{
+  "name": "@divya2424/basketline-kafka",
+  "version": "0.1.0",
+  "description": "Basketline's event bus on Kafka: ordered publishing, consumer groups with retries and a dead-letter topic, and an in-memory bus for tests.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "repository": { "type": "git", "url": "git+https://github.com/divya2424/basketline-kafka.git" },
+  "publishConfig": { "registry": "https://npm.pkg.github.com" },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@platformatic/kafka": "^2.14.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
