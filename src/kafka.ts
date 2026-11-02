@@ -18,9 +18,20 @@ export interface KafkaBusOptions {
   /** Prepended to every topic name; isolates environments and test runs. */
   topicPrefix?: string
   retry?: RetryPolicy
-  /** Called when a consumer loop dies; services should exit and be restarted. */
+  /**
+   * Called when a consumer can't rejoin its group for about 5 minutes (see
+   * subscribe); services should exit and be restarted.
+   */
   onFatal?: (error: unknown) => void
 }
+
+/** Waits between attempts to start a failed consumer again: 1 s, doubling, at most 30 s. */
+const REJOIN_BASE_MS = 1_000
+const REJOIN_MAX_MS = 30_000
+/** Failed attempts in a row before onFatal: about 5 minutes with the waits above. */
+const REJOIN_ATTEMPTS = 14
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** True if the error (or any nested error) is Kafka's TOPIC_ALREADY_EXISTS. */
 function isTopicAlreadyExists(error: unknown): boolean {
@@ -89,60 +100,109 @@ export async function createKafkaEventBus(options: KafkaBusOptions): Promise<Eve
     })
   }
 
+  /**
+   * One consumer for the group at a time. If it fails (it couldn't rejoin the
+   * group after a rebalance, its stream errored or ended), it is closed and a new
+   * one started, after a wait, from the group's committed offsets: a message that
+   * was being handled is delivered again. Errors are listened for on the
+   * consumer and its stream, so none reaches the process as an uncaught
+   * exception. Only when starting again keeps failing is onFatal called.
+   */
   const subscribe = async ({ groupId, topics, handler }: SubscribeOptions): Promise<Subscription> => {
     const dlq = dlqTopic(groupId)
     await ensureTopics(options, [...topics, dlq])
-    const consumer = new Consumer({
-      groupId: `${prefix}${groupId}`,
-      clientId: `${options.clientId}-${groupId}`,
-      bootstrapBrokers: options.brokers,
-      deserializers: stringDeserializers,
-    })
-    const stream = await consumer.consume({
-      topics: topics.map((topic) => `${prefix}${topic}`),
-      autocommit: false,
-      mode: 'committed',
-      fallbackMode: 'earliest',
-      sessionTimeout: 10_000,
-      heartbeatInterval: 1_000,
-    })
 
     let closing = false
-    // Messages are handled one at a time so per-partition order is kept.
-    const loop = (async () => {
-      for await (const message of stream) {
-        const context = {
-          topic: message.topic.slice(prefix.length),
-          partition: message.partition,
-          offset: message.offset.toString(),
+    let restarting = false
+    let current: { consumer: Consumer<string, string, string, string>; stream: { close(): Promise<void> } } | undefined
+
+    async function stop() {
+      const running = current
+      current = undefined
+      await running?.stream.close().catch(() => {})
+      await running?.consumer.close(true).catch(() => {})
+    }
+
+    async function start() {
+      const consumer = new Consumer({
+        groupId: `${prefix}${groupId}`,
+        clientId: `${options.clientId}-${groupId}`,
+        bootstrapBrokers: options.brokers,
+        deserializers: stringDeserializers,
+      })
+      consumer.on('error', (error: unknown) => void restart(error))
+      const stream = await consumer.consume({
+        topics: topics.map((topic) => `${prefix}${topic}`),
+        autocommit: false,
+        mode: 'committed',
+        fallbackMode: 'earliest',
+        sessionTimeout: 10_000,
+        heartbeatInterval: 1_000,
+      })
+      stream.on('error', (error: unknown) => void restart(error))
+      current = { consumer, stream }
+
+      // Messages are handled one at a time so per-partition order is kept.
+      ;(async () => {
+        for await (const message of stream) {
+          const context = {
+            topic: message.topic.slice(prefix.length),
+            partition: message.partition,
+            offset: message.offset.toString(),
+          }
+          const outcome = await processWithRetry(String(message.value ?? ''), context, groupId, handler, retry, logger)
+          if (outcome.status === 'dead-lettered') {
+            await producer.send({
+              messages: [
+                {
+                  topic: `${prefix}${dlq}`,
+                  key: String(message.key ?? ''),
+                  value: JSON.stringify(outcome.deadLetter),
+                  headers: { sourceTopic: message.topic, error: outcome.deadLetter.error.slice(0, 500) },
+                },
+              ],
+            })
+          }
+          await message.commit()
         }
-        const outcome = await processWithRetry(String(message.value ?? ''), context, groupId, handler, retry, logger)
-        if (outcome.status === 'dead-lettered') {
-          await producer.send({
-            messages: [
-              {
-                topic: `${prefix}${dlq}`,
-                key: String(message.key ?? ''),
-                value: JSON.stringify(outcome.deadLetter),
-                headers: { sourceTopic: message.topic, error: outcome.deadLetter.error.slice(0, 500) },
-              },
-            ],
-          })
+      })().then(
+        // A stream that stop() closed ends too: only the current one's end is a failure.
+        () => void (current?.stream === stream && restart(new Error('the consumer stream ended'))),
+        (error: unknown) => void (current?.stream === stream && restart(error)),
+      )
+    }
+
+    async function restart(error: unknown) {
+      if (closing || restarting) return
+      restarting = true
+      logger.error({ err: error, groupId }, 'kafka consumer failed; starting it again')
+      await stop()
+      for (let attempt = 1; !closing; attempt++) {
+        await sleep(Math.min(REJOIN_BASE_MS * 2 ** (attempt - 1), REJOIN_MAX_MS))
+        if (closing) break
+        try {
+          await start()
+          logger.info({ groupId, attempt }, 'kafka consumer started again')
+          break
+        } catch (startError) {
+          await stop()
+          if (attempt >= REJOIN_ATTEMPTS) {
+            logger.fatal({ err: startError, groupId, attempts: attempt }, 'kafka consumer could not start again')
+            options.onFatal?.(startError)
+            break
+          }
+          logger.warn({ err: startError, groupId, attempt }, 'kafka consumer could not start yet; trying again')
         }
-        await message.commit()
       }
-    })()
-    loop.catch((error: unknown) => {
-      if (closing) return
-      logger.fatal({ err: error, groupId }, 'kafka consumer loop failed')
-      options.onFatal?.(error)
-    })
+      restarting = false
+    }
+
+    await start()
 
     const subscription: Subscription = {
       async close() {
         closing = true
-        await stream.close().catch(() => {})
-        await consumer.close(true).catch(() => {})
+        await stop()
       },
     }
     subscriptions.push(subscription)
