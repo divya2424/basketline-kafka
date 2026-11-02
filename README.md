@@ -3,7 +3,7 @@
 The event bus [Basketline](https://github.com/divya2424/basketline)'s services use on Kafka:
 
 - **Publishing:** event envelopes go out in order. `publish` resolves once the broker has acknowledged them all.
-- **Consuming:** each consumer group gets every message on its topics. A failing handler is retried with exponential backoff, then the message goes to a dead-letter topic (`dlq.<groupId>`), so one bad message can't block a partition.
+- **Consuming:** each consumer group gets every message on its topics. A failing handler is retried with exponential backoff, then the message goes to a dead-letter topic (`dlq.<groupId>`), so one bad message can't block a partition. A consumer that fails (it can't rejoin its group after a rebalance, or its connection breaks) is closed and started again from the group's committed offsets, waiting 1 s, doubling to 30 s; nothing reaches the process as an uncaught exception.
 - **Topics:** created explicitly with `ensureTopics`, with their partition count and settings such as `retention.ms`.
 - **Tests:** an in-memory bus with the same behaviour, so services can be tested without Kafka.
 
@@ -69,7 +69,7 @@ await bus.subscribe({
 
 | Export | What it is |
 |---|---|
-| `createKafkaEventBus(options)` | The bus on Kafka. Options: `brokers`, `clientId`, `logger`, plus `topicPrefix` (prepended to every topic, to isolate environments or test runs), `retry` and `onFatal` (called if a consumer loop dies; exit and let the process restart) |
+| `createKafkaEventBus(options)` | The bus on Kafka. Options: `brokers`, `clientId`, `logger`, plus `topicPrefix` (prepended to every topic, to isolate environments or test runs), `retry` and `onFatal` (called when a consumer can't start again for about 5 minutes; exit and let the process restart) |
 | `ensureTopics({ brokers, clientId, topicPrefix? }, topics)` | Creates the topics that don't exist yet: 3 partitions each, replication from `KAFKA_REPLICATION` (default 1). An existing topic keeps its settings |
 | `createMemoryEventBus(logger, retry?)` | The in-memory bus for tests. Also has `published`, `deadLetters` and `drain()` (resolves once every group has handled everything) |
 | `EventEnvelope`, `isEnvelope` | The message shape, and a check for it. A message that isn't an envelope is dead-lettered at once, without retries |
